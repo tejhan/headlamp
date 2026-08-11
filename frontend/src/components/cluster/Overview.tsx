@@ -79,7 +79,7 @@ export default function Overview() {
     },
     {
       id: 'nodes',
-      component: () => <NodesStatusCircleChart items={nodes} />,
+      component: () => <NodesStatusCircleChart items={nodes} pods={pods} />,
     },
   ];
   const charts = chartProcessors.reduce(

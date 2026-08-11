@@ -24,6 +24,7 @@ import Pod from '../../../lib/k8s/pod';
 import Link from '../../common/Link';
 import TileChart from '../../common/TileChart';
 import { hasAKSManagedNodes, useIsUpgradeDetected } from '../../node/upgradeDetection';
+import { isNodeCordoned, isNodeDrained } from '../../node/utils';
 
 export function PodsStatusCircleChart(props: { items: Pod[] | null }) {
   const theme = useTheme();
@@ -119,9 +120,9 @@ function NodesUpgradeLink() {
   );
 }
 
-export function NodesStatusCircleChart(props: { items: Node[] | null }) {
+export function NodesStatusCircleChart(props: { items: Node[] | null; pods?: Pod[] | null }) {
   const theme = useTheme();
-  const { items } = props;
+  const { items, pods } = props;
   const { t } = useTranslation(['translation', 'glossary']);
 
   const isAKSCluster = useMemo(() => {
@@ -134,14 +135,59 @@ export function NodesStatusCircleChart(props: { items: Node[] | null }) {
     return readyCondition?.status === 'True';
   });
 
+  // Bucket each node into one category: (schedulable / cordoned / drained / notReady).
+  // Pods are indexed by node name so we can determine which cordoned nodes are drained.
+  const { schedulable, cordoned, drained, notReady } = useMemo(() => {
+    const podsByNode = new Map<string, Pod[]>();
+    (pods || []).forEach(pod => {
+      const nodeName = pod.spec?.nodeName;
+      if (!nodeName) return;
+      const list = podsByNode.get(nodeName) ?? [];
+      list.push(pod);
+      podsByNode.set(nodeName, list);
+    });
+
+    const counts = { schedulable: 0, cordoned: 0, drained: 0, notReady: 0 };
+    (items || []).forEach(node => {
+      const ready =
+        node.status?.conditions?.find(condition => condition.type === 'Ready')?.status === 'True';
+      if (!ready) {
+        counts.notReady++;
+      } else if (!isNodeCordoned(node)) {
+        counts.schedulable++;
+      } else if (isNodeDrained(node, podsByNode.get(node.getName()) ?? [])) {
+        counts.drained++;
+      } else {
+        counts.cordoned++;
+      }
+    });
+    return counts;
+  }, [items, pods]);
+
   function getLegend() {
     if (items === null) {
       return null;
     }
-    return t('translation|{{ numReady }} / {{ numItems }} Ready', {
-      numReady: nodesReady.length,
-      numItems: items.length,
-    });
+    return (
+      <>
+        {t('translation|{{ numReady }} / {{ numItems }} Ready', {
+          numReady: nodesReady.length,
+          numItems: items.length,
+        })}
+        {cordoned > 0 && (
+          <>
+            <br />
+            {t('translation|{{ numCordoned }} Cordoned', { numCordoned: cordoned })}
+          </>
+        )}
+        {drained > 0 && (
+          <>
+            <br />
+            {t('translation|{{ numDrained }} Drained', { numDrained: drained })}
+          </>
+        )}
+      </>
+    );
   }
 
   function getLabel() {
@@ -160,11 +206,21 @@ export function NodesStatusCircleChart(props: { items: Node[] | null }) {
     return [
       {
         name: 'ready',
-        value: nodesReady.length,
+        value: schedulable,
+      },
+      {
+        name: 'cordoned',
+        value: cordoned,
+        fill: theme.palette.warning.main,
+      },
+      {
+        name: 'drained',
+        value: drained,
+        fill: theme.palette.warning.dark,
       },
       {
         name: 'notReady',
-        value: items.length - nodesReady.length,
+        value: notReady,
         fill: theme.palette.error.main,
       },
     ];

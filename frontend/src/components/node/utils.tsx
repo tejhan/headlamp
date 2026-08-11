@@ -21,6 +21,25 @@ import { styled } from '@mui/system';
 import { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import Node from '../../lib/k8s/node';
+import Pod from '../../lib/k8s/pod';
+
+export function isNodeCordoned(node: Node): boolean {
+  return !!node.spec?.unschedulable;
+}
+
+// Pods managed by a DaemonSet and mirror pods are left behind by `kubectl drain`,
+// so they are ignored when deciding whether a node has been drained.
+function isWorkloadPod(pod: Pod): boolean {
+  const ownedByDaemonSet = pod.metadata.ownerReferences?.some(ref => ref.kind === 'DaemonSet');
+  const isMirror = pod.metadata.annotations?.['kubernetes.io/config.mirror'] !== undefined;
+  return !ownedByDaemonSet && !isMirror;
+}
+
+// A node is drained when it is cordoned and no workload pods
+// remain scheduled on it.
+export function isNodeDrained(node: Node, podsOnNode: Pod[]): boolean {
+  return isNodeCordoned(node) && !podsOnNode.some(isWorkloadPod);
+}
 
 const WrappingBox = styled(Box)(({ theme }) => ({
   display: 'flex',
